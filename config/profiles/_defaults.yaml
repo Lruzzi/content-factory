@@ -1,0 +1,282 @@
+# =============================================================================
+# _defaults.yaml — base values every profile inherits.
+#
+# Merge order (later wins, deep-merged per key):
+#   _defaults.yaml  ->  profiles/<name>.yaml  ->  sources[i].overrides
+#
+# A profile = one niche: WHAT we clip (sources), HOW we find moments
+# (live capture, signals, selection), HOW it looks (layout, captions,
+# branding) and WHERE it goes (targets / test_targets).
+# Copy a profile file to start a new niche — no code changes.
+# =============================================================================
+
+version: 2
+
+# rnd     = every service runs end to end, uploads go to test_targets only
+# publish = uploads go to the brand accounts in targets
+mode: rnd
+
+language: id                     # ISO 639-1; Whisper + LLM prompt language
+
+# --- 0. LIVE CAPTURE (primary path) ------------------------------------------
+# Most clips come from streams while they're live: many recordings are
+# deleted, privated or made members-only after the stream ends.
+live:
+  capture: true
+  check_every_min: 4             # live-watcher polls each source's /live page
+  segment_min: 10                # recorder cuts the stream into 10-min files
+  segment_overlap_s: 120         # analysis includes the tail of the previous segment
+  quality: 1080p                 # ~2 GB/h per stream (720p is ~1.2 GB/h). Crops of a face or cam need the pixels:
+                                 # a 720p source looked soft once enlarged to 1080x1920
+  min_quality: 720p              # never record below this (a recording still being processed offers only 360p);
+                                 # those hours come from the download path in full quality
+  max_buffer_h: 3                # rolling buffer of raw segments on disk
+  max_hold_h: 12                 # a segment a pending job still needs is kept up to this long
+  chat_retention_days: 14        # raw chat messages; per-window counts are kept longer
+  vod_fallback: true            # use the ended recording only to fill gaps
+  vod_wait_h: 24                 # how long to keep re-checking a processing recording
+  skip_members_only: true        # never record members-only / private streams
+
+# --- 1. DISCOVER: regular uploads and ended streams --------------------------
+discover:
+  poll_every_min: 30
+  max_age_days: 60               # never pick anything older than this
+  backfill_per_source: 5         # first run: most-viewed unprocessed videos in the window
+  daily_per_source: 2            # with no new uploads: next most-viewed in the window
+  min_duration_s: 300
+  max_duration_s: 43200
+  include_shorts: false
+  title_include: []              # keep only if title has ANY of these (empty = all)
+  title_exclude: ["#shorts", "trailer", "teaser"]
+  max_window_min: 60             # an old video is transcribed in part: its busiest stretch of this length
+  max_groq_day_share: 0.5        # nothing is fetched above this share of the daily Groq audio limit
+  max_backlog: 6                 # nor while this many jobs wait to be downloaded or transcribed
+
+# --- SCOUT: suggest channels with the most views in the last 30 days ---------
+scout:
+  enabled: false
+  run_every_days: 7
+  keywords: []
+  region: ID
+  lookback_days: 30
+  min_channel_views: 100000      # summed views of recent uploads
+  max_suggestions: 10            # sent to Telegram; you approve before they're added
+
+# --- 2. DOWNLOAD (uploads / ended streams only) ------------------------------
+download:
+  max_height: 1080               # same reason as live.quality
+  sections_only: true            # fetch candidate windows, not the whole video
+  section_margin_s: 30
+  keep_source_hours: 48
+
+# --- 3. UNDERSTAND: signals -> one score per time slice ----------------------
+# Missing signals (no heatmap while live, no chat on uploads) are dropped
+# and the remaining weights are rescaled automatically.
+signals:
+  heatmap:    { enabled: true,  weight: 0.30 }                  # uploads/ended only
+  chat:       { enabled: true,  weight: 0.35, window_s: 10 }    # live chat or chat replay
+  loudness:   { enabled: true,  weight: 0.20, percentile: 90 }
+  scene_cut:  { enabled: true,  weight: 0.15 }
+  keywords:   { enabled: false, weight: 0.10, terms: [] }
+  transcript:
+    enabled: true
+    mode: candidates_only        # live segments: candidates_only | full (selection.mode hybrid/transcript needs full)
+    vod_mode: candidates_only    # downloaded videos and ended streams. full needs download.sections_only: false
+                                 # and would spend the Groq daily cap on one long video, so keep candidates_only
+    margin_s: 60
+    engine: groq_api             # groq_api | faster_whisper | openai_api
+    model: whisper-large-v3-turbo
+    # When Groq's free limit is reached, the segment goes to OpenRouter's Whisper (paid from the OpenRouter budget, about
+    # $0.012 per audio hour) instead of waiting. Measured 2026-10-25 on one sample of mixed Indonesian and English
+    # slang: noticeably less accurate than Groq's, and it cannot be pinned to Groq or given the vocabulary prompt.
+    # `none` makes the segment wait for Groq as before.
+    fallback_engine: openrouter   # openrouter | none (faster_whisper and openai_api are not built)
+    fallback_model: openai/whisper-large-v3-turbo
+    # Whisper makes these up from silence and game sound (seen on Rineeeloyyyeh's quiet streams): a sentence that begins
+    # with one is dropped with its words, so it is never a caption or a moment for the judge.
+    ignore_phrases: ["terima kasih telah menonton", "terima kasih sudah menonton", "thanks for watching",
+                     "thank you for watching", "sub indo by", "subtitles by", "subtitle by", "amara org"]
+
+# --- 4. SELECT ---------------------------------------------------------------
+selection:
+  # signals    = score peaks from chat / loudness / heatmap, then the LLM judge (candidates_only transcript)
+  # hybrid     = signal peaks AND moments the LLM finds in the full transcript, one pool, one judge
+  # transcript = transcript candidates only
+  # hybrid and transcript need signals.transcript.mode: full and llm_judge.enabled.
+  # The LLM returns sentence ids and a kind; code derives the times (never trust LLM timestamps).
+  mode: signals
+  slice_s: 10
+  top_k: 5                       # per video or per live segment
+  min_score: 0.55
+  min_gap_s: 120
+  trim: { lead_s: 0.4, tail_s: 0.6 }   # cut to the words, not to Whisper's sentence times (null: sentence times)
+  clips_per_day: 6               # clips made in 24 hours, all sources together (0: no limit); /clips in Telegram replaces it
+  clip_length_s: [25, 60]
+  snap_to_sentence: true
+  dedupe_overlap: 0.5            # skip if >50% overlaps an existing clip (stream-relative time)
+  # Per-kind overrides. Kinds: highlight | donation | tutorial | news | funny.
+  # A kind with no clip_length_s uses selection.clip_length_s.
+  kinds: {}
+  # Which LLM judges the moments. The key is never here: api_key_env names the environment variable that holds it.
+  # Every model used must have a price in llm_prices.yaml (0 for a free one), so the budgets can see it.
+  #   provider: anthropic           -> Claude. api_key_env defaults to ANTHROPIC_API_KEY. Optional: effort low|medium|high
+  #   provider: openai_compatible   -> OpenRouter, Groq, Gemini's compatible endpoint, a local Ollama. Needs base_url and
+  #                                    api_key_env. Optional: json_mode (ask for JSON; not every model supports it)
+  # `fallbacks: [ {provider, model, ...}, ... ]` (up to 3) are tried in order when the primary fails; a failed provider is
+  # skipped for cooldown_s. Each is checked like the primary and needs a price.
+  #
+  # The setup for every profile (a profile only says its own prompt): paid models through OpenRouter first, so the
+  # pipeline is not held to a free tier's ~20-50 requests a day, then Gemini's free tier and OpenRouter's free models as
+  # the last backups. The paid ones are counted by the OpenRouter budget (workers.yaml budget.openrouter, /budget in
+  # Telegram). Until OPEN_ROUTER_KEY holds credit the paid ones fail and the next in the chain answers. Run
+  # `make llm-check PROFILE=<name>` to see which of them answer today (free models come and go).
+  #
+  # A model per task: selection is `llm_judge`; llm_tasks gives the recap questions and the titles models of their own.
+  # Prices are in llm_prices.yaml.
+  llm_judge:
+    enabled: true
+    provider: openai_compatible
+    model: "anthropic/claude-haiku-5.5"
+    base_url: https://openrouter.ai/api/v1
+    api_key_env: OPEN_ROUTER_KEY
+    max_output_tokens: 4096
+    timeout_s: 120
+    max_retries: 2               # the SDK's own retries on 429 and 5xx; job retries (workers.yaml) sit on top
+    prompt: prompts/default.md
+    max_candidates_sent: 8
+    fallbacks:
+      - { provider: openai_compatible, model: "deepseek/deepseek-v4-flash-0731", base_url: "https://openrouter.ai/api/v1", api_key_env: OPEN_ROUTER_KEY, max_output_tokens: 16000, timeout_s: 300 }
+      - { provider: openai_compatible, model: gemini-3.5-flash, base_url: "https://generativelanguage.googleapis.com/v1beta/openai/", api_key_env: GEMINI_KEY, max_output_tokens: 4096 }
+      - { provider: openai_compatible, model: "poolside/laguna-s-2.1:free", base_url: "https://openrouter.ai/api/v1", api_key_env: OPEN_ROUTER_KEY, max_output_tokens: 4096 }
+  llm_tasks:
+    recap_match:                 # which match has finished: reads about 45 minutes of transcript, about 3 times an hour
+      # Haiku first: on a real 332-sentence prompt it answered in 5 s with one sensible match boundary. DeepSeek v4 flash
+      # and Qwen 3.7 flash think silently first (up to 12,000 tokens, 3 minutes, or an empty reply when the limit is hit),
+      # and DeepSeek split the same match differently on each run; the saving would have been cents a day.
+      provider: openai_compatible
+      model: "anthropic/claude-haiku-5.5"
+      base_url: https://openrouter.ai/api/v1
+      api_key_env: OPEN_ROUTER_KEY
+      max_output_tokens: 4096
+      fallbacks:
+        - { provider: openai_compatible, model: "deepseek/deepseek-v4-flash-0731", base_url: "https://openrouter.ai/api/v1", api_key_env: OPEN_ROUTER_KEY, max_output_tokens: 16000, timeout_s: 300 }
+        - { provider: openai_compatible, model: "qwen/qwen3.7-flash", base_url: "https://openrouter.ai/api/v1", api_key_env: OPEN_ROUTER_KEY, max_output_tokens: 16000, timeout_s: 300 }
+        - { provider: openai_compatible, model: gemini-3.5-flash, base_url: "https://generativelanguage.googleapis.com/v1beta/openai/", api_key_env: GEMINI_KEY, max_output_tokens: 4096 }
+    recap_pick:                  # which moments of one match: needs the judge's quality
+      provider: openai_compatible
+      model: "anthropic/claude-haiku-5.5"
+      base_url: https://openrouter.ai/api/v1
+      api_key_env: OPEN_ROUTER_KEY
+      max_output_tokens: 4096
+      fallbacks:
+        - { provider: openai_compatible, model: "deepseek/deepseek-v4-flash-0731", base_url: "https://openrouter.ai/api/v1", api_key_env: OPEN_ROUTER_KEY, max_output_tokens: 16000, timeout_s: 300 }
+        - { provider: openai_compatible, model: gemini-3.5-flash, base_url: "https://generativelanguage.googleapis.com/v1beta/openai/", api_key_env: GEMINI_KEY, max_output_tokens: 4096 }
+    transcript_fix:              # a clip's words checked against the glossary (hero names, game terms): a few hundred tokens a clip
+      provider: openai_compatible
+      model: "anthropic/claude-haiku-5.5"
+      base_url: https://openrouter.ai/api/v1
+      api_key_env: OPEN_ROUTER_KEY
+      max_output_tokens: 1024
+      fallbacks:
+        - { provider: openai_compatible, model: "deepseek/deepseek-v4-flash-0731", base_url: "https://openrouter.ai/api/v1", api_key_env: OPEN_ROUTER_KEY, max_output_tokens: 16000, timeout_s: 300 }
+        - { provider: openai_compatible, model: gemini-3.5-flash, base_url: "https://generativelanguage.googleapis.com/v1beta/openai/", api_key_env: GEMINI_KEY, max_output_tokens: 2048 }
+    package:                     # titles, descriptions, hashtags
+      provider: openai_compatible
+      model: "qwen/qwen3.7-flash"
+      base_url: https://openrouter.ai/api/v1
+      api_key_env: OPEN_ROUTER_KEY
+      max_output_tokens: 16000   # a reasoning model: its hidden thinking counts here, and an empty reply is what a too small limit looks like
+      timeout_s: 300
+      fallbacks:
+        - { provider: openai_compatible, model: "deepseek/deepseek-v4-flash-0731", base_url: "https://openrouter.ai/api/v1", api_key_env: OPEN_ROUTER_KEY, max_output_tokens: 16000, timeout_s: 300 }
+        - { provider: openai_compatible, model: gemini-3.5-flash, base_url: "https://generativelanguage.googleapis.com/v1beta/openai/", api_key_env: GEMINI_KEY, max_output_tokens: 2048 }
+
+# --- 4b. COMPILATION: one video from the best moments of one finished match --------
+# The LLM reads the transcript to find matches that have finished (sentence numbers, never times), then picks moments
+# in order. Needs the full transcript and the judge. Off here; a profile turns it on.
+compilation:
+  enabled: false
+  match_window_min: 45           # how much of the stream the LLM reads to find finished matches
+  min_match_s: 480               # a stretch shorter than this is not a match
+  check_every_min: 20            # ask which matches finished once per this much stream (0: after every segment)
+  length_s: [60, 170]            # the whole recap (YouTube Shorts allow 180 s)
+  moment_s: [8, 35]              # each moment in it
+  min_moments: 3
+  max_moments: 8
+  match_prompt: prompts/match_finder.md
+  recap_prompt: prompts/recap.md
+
+# --- 5+6. CUT + RENDER (one FFmpeg pass) -------------------------------------
+output:
+  width: 1080
+  height: 1920
+  fps: 30
+  video_codec: h264_nvenc        # falls back to libx264 if NVENC isn't available
+  crf: 20
+  audio_codec: aac
+  audio_bitrate: 160k
+  audio_sample_rate: 48000       # Instagram Reels take 48 kHz at most (loudnorm alone would leave 96 kHz)
+  loudnorm: true
+
+layout:
+  type: blur_fill                # facetrack | split | center | blur_fill
+  cam:  null                     # split only: {x, y, w, h} in source pixels (1920x1080 reference)
+  main: null
+  split_ratio: 0.36              # split only: share of the height for the cam panel, on top; gameplay below
+  scaler: lanczos                # how a panel is enlarged: lanczos keeps edges sharper (compared on real footage, 2026-10-26)
+  sharpen: 0.8                   # split only: a light sharpen of the face cam panel, the one enlarged the most (0 = off)
+  donation_y: 0.18               # a donation card on a layout other than split: how far down its top edge is (share of height)
+  smoothing: 0.85
+  max_pan_px_per_s: 400
+
+captions:
+  enabled: true
+  style: word_pop
+  font: assets/fonts/Montserrat-ExtraBold.ttf   # OFL license
+  size: 72
+  color: "#FFFFFF"
+  highlight: "#FFE600"
+  outline: 6
+  y: 0.62
+  reveal: progressive            # progressive: a line fills up word by word (nothing is shown before it is spoken); line: the whole line at once
+  offset_s: 0.10                 # captions come this much later than Whisper's word times (they tend to be early)
+  below_cam: 0.035                # split layout only: the captions' centre this far (share of height) under the cam panel,
+                                 # which is above the donation card and off the hero; other layouts use y
+  max_words_per_line: 3
+  uppercase: true
+
+branding:
+  hook_overlay: { enabled: true, seconds: 2.5, y: 0.14 }
+  logo: { enabled: true, path: assets/logo.png, position: top_right, width: 140, opacity: 0.9 }  # position: top_right | top_left | bottom_right | bottom_left
+  credit: { text: "Full video: {source_name}", position: bottom, size: 34 }
+
+safe_zone: { top: 0.12, bottom: 0.20, right: 0.14, left: 0.04 }
+
+# --- 7. PACKAGE --------------------------------------------------------------
+package:
+  prompt: prompts/package_default.md
+  hashtags: { fixed: [], generated_max: 4, platform_fixed: { tiktok: ["#fyp", "#foryourpage"] } }  # platform_fixed: only on that platform
+  ai_disclosure: false
+  include_source_link: true
+
+# --- 8. REVIEW ---------------------------------------------------------------
+review:
+  channel: telegram
+  required: true                 # true = the clip waits for your Telegram tap; false = it goes out without it
+  expire_after_h: 24             # unapproved clips expire (only when required: true)
+
+# --- 9. PUBLISH --------------------------------------------------------------
+# Account ids refer to accounts.yaml. rnd mode uses test_targets, publish mode targets.
+targets: []
+test_targets: []
+
+limits:
+  max_clips_per_video: 3
+  max_clips_per_live_hour: 2
+  daily_budget_usd: 2.00
+
+# Source-level safety (set per source):
+#   clip_policy: open    -> clip it (default)
+#   clip_policy: blocked -> never clip (creator objected)
+# Copyright claims / strikes pause a source automatically; that state lives in
+# Postgres (sources.paused_at), not in this file.

@@ -1,0 +1,136 @@
+# =============================================================================
+# workers.yaml — LOAD context. Worker counts per service, scaled by queue
+# depth. Content (which channels) never changes worker counts; load does.
+# The scaler applies these rules deterministically; Hermes only reports.
+# =============================================================================
+
+host_profile: laptop               # laptop | mini_pc | vps
+
+broker:
+  backend: redis                   # Redis 8 Streams
+  url_env: REDIS_URL
+  stream_maxlen: 10000             # approximate trim on every stream, so Redis memory stays bounded
+  dead_letter_maxlen: 1000         # dlq keeps the newest failures; the job row in Postgres is the record
+database:
+  url_env: DATABASE_URL            # PostgreSQL 18
+retry: { max_attempts: 3, backoff_s: [60, 300, 1800], dead_letter_stream: dlq }
+
+scaler:
+  check_every_s: 30
+
+# Postgres is the source of truth; Redis only carries job ids. The reconciler runs inside the
+# scaler and re-publishes work the queue lost: jobs whose stage is done but whose next stage
+# has not started after stalled_after_min, retries that are due (retry_at in Postgres), and
+# streams whose recorder lease expired. visibility_timeout_s (per service, below) is how long a
+# worker may stay silent before its message is claimed by another worker.
+# running_after_min: a job still marked running after this long has lost its worker (longer than every visibility_timeout_s).
+reconciler: { every_s: 30, stalled_after_min: 10, running_after_min: 60 }
+
+# Disk clean-up (the scaler runs it). Source recordings follow each profile's live.max_buffer_h and live.max_hold_h.
+# Clips: a rejected or expired one goes at once; an approved one stays until it is published everywhere, then
+# published_keep_h more; if a post failed it stays failed_keep_days so you can recover it; an approved clip that is
+# still not published after approved_max_hold_days (a publisher that is down?) is deleted and you are told.
+retention: { every_min: 10, published_keep_h: 1, failed_keep_days: 3, approved_max_hold_days: 3 }
+
+# Recorder and chat-listener run for hours, so they hold a lease row in Postgres and ack their
+# message at once. A dead worker is noticed after expires_s; with the sweep that must stay
+# inside NFR-11 (at most 2 min lost per drop).
+lease: { heartbeat_s: 15, expires_s: 60 }
+
+hosts:
+  laptop:
+    quiet_hours: ["08:00-18:00"]   # heavy services max 1 worker while you use the laptop
+    services:
+      live-watcher:  { min: 1, max: 1 }
+      recorder:      { max_concurrent_recordings: 3 }   # one job per live stream
+      chat-listener: { max_concurrent: 3 }
+      discover:      { min: 1, max: 1 }
+      # visibility_timeout_s: starting values, tune after week 1 (longer than the slowest normal job)
+      download:      { min: 1, max: 2, scale_up_at: 10, visibility_timeout_s: 3300 }   # an hour of 1080p takes ~30 min; must stay under reconciler.running_after_min
+      understand:    { min: 1, max: 3, scale_up_at: 3, rate_limit: groq, visibility_timeout_s: 600 }
+      select:        { min: 1, max: 2, scale_up_at: 10, rate_limit_rpm: 30, visibility_timeout_s: 300 }
+      render:        { min: 1, max: 2, scale_up_at: 3, visibility_timeout_s: 1200 }   # above the render timeout (840 s)
+      package:       { min: 1, max: 1, rate_limit_rpm: 30, visibility_timeout_s: 300 }
+      review:        { min: 1, max: 1 }              # acks after sending the preview; waits for you in Postgres
+      publisher:     { per_platform: true, min: 1, max: 1, visibility_timeout_s: 1800 }
+      stats:         { min: 1, max: 1, run_every_h: 6 }
+      scout:         { min: 0, max: 1, run_every_days: 7 }
+
+  mini_pc:                         # always-on box at home (no GPU)
+    services:
+      live-watcher:  { min: 1, max: 1 }
+      recorder:      { max_concurrent_recordings: 5 }
+      chat-listener: { max_concurrent: 5 }
+      discover:      { min: 1, max: 1 }
+      download:      { min: 1, max: 3, scale_up_at: 10, visibility_timeout_s: 3300 }
+      understand:    { min: 1, max: 3, scale_up_at: 3, rate_limit: groq, visibility_timeout_s: 600 }
+      select:        { min: 1, max: 3, scale_up_at: 10, rate_limit_rpm: 60, visibility_timeout_s: 300 }
+      render:        { min: 1, max: 3, scale_up_at: 3, visibility_timeout_s: 1800 }   # no GPU: slower
+      package:       { min: 1, max: 2, rate_limit_rpm: 60, visibility_timeout_s: 300 }
+      review:        { min: 1, max: 1 }
+      publisher:     { per_platform: true, min: 1, max: 1, visibility_timeout_s: 1800 }
+      stats:         { min: 1, max: 1, run_every_h: 6 }
+      scout:         { min: 0, max: 1, run_every_days: 7 }
+
+# Groq free-plan limits (verify in your Groq console; per organization).
+# Every service beats every 30 s (common/heartbeat.py). The watchdog in the scaler reports one that is quiet for longer than
+# stale_after_s (to the alerts room), says when it is back, and posts a digest to the monitoring room every digest_every_h.
+# `expected` is every service compose runs; take one out here if you stop it on purpose.
+health:
+  stale_after_s: 120
+  digest_every_h: 6
+  expected:
+    - live-watcher
+    - recorder
+    - chat-listener
+    - discover
+    - download
+    - understand
+    - select
+    - render
+    - package
+    - review
+    - publisher-shorts
+    - publisher-facebook
+    - publisher-reels
+    - publisher-tiktok
+    - scaler
+
+# Rules you change from Telegram while it runs (/rules shows them; /cap 6, /spacing 120, /window 10:00-23:00, /clips 6, each
+# asks for a Yes tap). The starting values are in accounts.yaml `defaults` (cap, spacing, window) and in the profile
+# defaults (`selection.clips_per_day`); a value you set is kept in the database and wins over them. `ceilings` are what
+# Telegram can never go above: a guard against a typo or a stolen Telegram account, changed only here, by hand.
+rules:
+  ceilings: { daily_cap: 20, min_spacing_min: 720, clips_per_day: 40 }
+
+# Money spent through the OpenRouter key (any paid OpenAI-compatible model). `cap_usd` is the monthly cap to start with;
+# after that the live cap is a row in the database that you change by sending `/budget 25` in Telegram (it asks you to
+# confirm). `cap_ceiling_usd` is only a guard against a typo or a stolen Telegram account: Telegram cannot go above it,
+# raise it here by hand when your budget grows. The real hard stop is the monthly limit on the key itself at
+# openrouter.ai: keep the two in step. Spend is counted from the cost ledger. At alert_at of the cap you get one alert;
+# at stop_at the jobs that need a paid model wait (nothing is lost) until the month rolls over or you raise the cap.
+budget:
+  openrouter:
+    cap_ceiling_usd: 100
+    cap_usd: 17
+    alert_at: 0.8
+    stop_at: 0.9
+
+# The hours planner (services/understand/planner.py). The day's Groq audio (rate_limits.groq, up to stop_at) is shared
+# fairly between the sources that are active: one over its share waits only while another source below its share has
+# segments waiting, so nothing is held back when nobody needs it. What is left of today's OpenRouter budget caps the audio
+# too, at the cost of an hour of audio: measured from the ledger once min_measured_hours of audio were sent in the last
+# week, until then assumed. Waiting costs nothing and loses nothing: the segment is looked at again in minutes.
+planner:
+  enabled: true
+  assumed_cost_per_audio_hour_usd: 0.03
+  min_measured_hours: 2
+
+rate_limits:
+  groq:
+    requests_per_min: 20
+    audio_seconds_per_hour: 7200
+    audio_seconds_per_day: 28800
+    alert_at: 0.8                  # Telegram alert at this share of audio_seconds_per_day
+    stop_at: 0.9                   # transcription waits (nothing is lost) above this share, so the limit is never reached
+    on_limit: fallback             # switch to transcript.fallback_engine; if that is "none", selection runs on signals only

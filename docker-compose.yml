@@ -1,0 +1,269 @@
+# The two stateful dependencies, then one container per service (one image, built from the Dockerfile).
+# Images are pinned by digest (checked 2026-10-22). Both ports listen on localhost only.
+# Needs POSTGRES_PASSWORD and REDIS_PASSWORD in .env (see .env.example).
+name: content-factory
+
+# What every service container shares. Each service lists only the secrets it needs: account tokens reach the publisher
+# containers and nothing else. The config folder is mounted read-only, so editing the YAML needs no rebuild.
+x-service: &service
+  image: content-factory:local
+  build: .
+  restart: unless-stopped
+  init: true
+  volumes:
+    - ./config:/app/config:ro
+  security_opt:
+    - no-new-privileges:true
+  cap_drop:
+    - ALL
+  read_only: true
+  tmpfs:
+    - /tmp:size=256m
+  mem_limit: 256m
+  depends_on:
+    migrate:
+      condition: service_completed_successfully
+    redis:
+      condition: service_healthy
+
+x-core-env: &core-env # what any service may know: where the queue and database are, and how to alert you
+  DATABASE_URL: ${DATABASE_URL:?set DATABASE_URL in .env}
+  REDIS_URL: ${REDIS_URL:?set REDIS_URL in .env}
+  TELEGRAM_BOT_TOKEN: ${TELEGRAM_BOT_TOKEN:-}
+  TELEGRAM_ALLOWED_USERS: ${TELEGRAM_ALLOWED_USERS:-}
+  XDG_CACHE_HOME: /tmp
+
+x-llm-env: &llm-env # keys of the LLM providers a profile may name in selection.llm_judge
+  GEMINI_KEY: ${GEMINI_KEY:-}
+  OPEN_ROUTER_KEY: ${OPEN_ROUTER_KEY:-}
+  ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+
+services:
+  postgres:
+    image: postgres:18.6-trixie@sha256:edb0c08dc33befd0262ab3b5cf1c4f3f8cfd8b09e88c05b45adee29d6761ddb6
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: factory
+      POSTGRES_DB: factory
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}
+    ports:
+      - "127.0.0.1:5432:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql # PostgreSQL 18 images keep the data in a versioned subfolder here
+    mem_limit: 1g
+    security_opt:
+      - no-new-privileges:true
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U factory -d factory"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  redis:
+    image: redis:8.8.3-trixie@sha256:418e397fd48d66e450af13baab123397f2d2580b07ef310c3a5dbe96c3d731f1
+    restart: unless-stopped
+    environment:
+      REDIS_PASSWORD: ${REDIS_PASSWORD:?set REDIS_PASSWORD in .env}
+    # Append-only file so queued ids survive a restart (fsync every second); a queue must never evict.
+    command:
+      - sh
+      - -c
+      - >-
+        exec redis-server --requirepass "$$REDIS_PASSWORD" --appendonly yes --appendfsync everysec
+        --maxmemory 512mb --maxmemory-policy noeviction
+    ports:
+      - "127.0.0.1:6379:6379"
+    volumes:
+      - redisdata:/data
+    mem_limit: 640m
+    security_opt:
+      - no-new-privileges:true
+    healthcheck:
+      test: ["CMD-SHELL", 'REDISCLI_AUTH="$$REDIS_PASSWORD" redis-cli ping | grep -q PONG']
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # Brings the database to the newest schema, then exits. Every service waits for it.
+  migrate:
+    <<: *service
+    restart: "no"
+    command: ["python", "-c", "from common.db import make_engine, migrate; migrate(make_engine())"]
+    environment:
+      DATABASE_URL: ${DATABASE_URL:?set DATABASE_URL in .env}
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  live-watcher:
+    <<: *service
+    command: ["python", "-m", "services.live_watcher"]
+    environment: *core-env
+
+  # Finds ended streams and uploads of the sources that are not live (every few minutes, within the Groq limits).
+  discover:
+    <<: *service
+    command: ["python", "-m", "services.discover"]
+    environment: *core-env
+    volumes:
+      - ./config:/app/config:ro
+    mem_limit: 256m
+
+  # Fetches the stretch of a video a discover job asks for, as segments. Engine service: no tokens, no accounts.
+  download:
+    <<: *service
+    command: ["python", "-m", "services.download"]
+    environment: *core-env
+    volumes:
+      - ./config:/app/config:ro
+      - media:/media
+    mem_limit: 768m # yt-dlp and FFmpeg write to /media/download-tmp, not to memory
+
+  recorder:
+    <<: *service
+    command: ["python", "-m", "services.recorder"]
+    environment: *core-env
+    volumes:
+      - ./config:/app/config:ro
+      - media:/media
+    mem_limit: 512m
+
+  chat-listener:
+    <<: *service
+    command: ["python", "-m", "services.chat_listener"]
+    environment: *core-env
+    volumes:
+      - ./config:/app/config:ro
+    mem_limit: 256m
+
+  understand:
+    <<: *service
+    command: ["python", "-m", "services.understand"]
+    environment:
+      <<: *core-env
+      GROQ_API_KEY: ${GROQ_API_KEY:-}
+      OPEN_ROUTER_KEY: ${OPEN_ROUTER_KEY:-}  # the transcription fallback when Groq is full
+    volumes:
+      - ./config:/app/config:ro
+      - media:/media:ro
+
+  select:
+    <<: *service
+    command: ["python", "-m", "services.select"]
+    environment:
+      <<: [*core-env, *llm-env]
+
+  render:
+    <<: *service
+    command: ["python", "-m", "services.render"]
+    environment: *core-env
+    volumes:
+      - ./config:/app/config:ro
+      - ./assets:/app/assets:ro
+      - media:/media
+    tmpfs:
+      - /tmp:size=512m # a recap's joined source is about 150 MB at 136 s of 1080p60 and counts against mem_limit
+    mem_limit: 1536m # a 1080p60 source needs more than the 720p one did
+
+  package:
+    <<: *service
+    command: ["python", "-m", "services.package"]
+    environment:
+      <<: [*core-env, *llm-env]
+
+  review:
+    <<: *service
+    command: ["python", "-m", "services.review"]
+    environment:
+      <<: *core-env
+      R2_ACCOUNT_ID: ${R2_ACCOUNT_ID:-} # the full quality copy of each clip is stored here when it is sent for approval
+      R2_BUCKET: ${R2_BUCKET:-}
+      R2_ACCESS_KEY_ID: ${R2_ACCESS_KEY_ID:-}
+      R2_SECRET_ACCESS_KEY: ${R2_SECRET_ACCESS_KEY:-}
+    volumes:
+      - ./config:/app/config:ro
+      - media:/media:ro
+    mem_limit: 512m # the preview encode and the upload to R2 run here
+
+  publisher-shorts:
+    <<: *service
+    command: ["python", "-m", "services.publisher", "shorts"]
+    # The sign-in files in ./tokens are private to their owner (mode 600), so this one container runs as that user.
+    # Their ids on a Linux or WSL box are usually 1000; `id -u` and `id -g` tell you if yours differ.
+    user: "${TOKENS_UID:-1000}:${TOKENS_GID:-1000}"
+    environment: *core-env
+    volumes:
+      - ./config:/app/config:ro
+      - ./tokens:/app/tokens:ro # YouTube client file and sign-in tokens: only this container sees them
+      - media:/media:ro
+
+  publisher-facebook:
+    <<: *service
+    command: ["python", "-m", "services.publisher", "facebook"]
+    environment:
+      <<: *core-env
+      FB_TEST_PAGE_TOKEN: ${FB_TEST_PAGE_TOKEN:-}
+      FB_TEST_PAGE_ID: ${FB_TEST_PAGE_ID:-}
+      FB_MLBB_PAGE_TOKEN: ${FB_MLBB_PAGE_TOKEN:-}
+      FB_MLBB_PAGE_ID: ${FB_MLBB_PAGE_ID:-}
+    volumes:
+      - ./config:/app/config:ro
+      - media:/media:ro
+
+  publisher-reels:
+    <<: *service
+    command: ["python", "-m", "services.publisher", "reels"]
+    environment:
+      <<: *core-env
+      IG_TEST_TOKEN: ${IG_TEST_TOKEN:-}
+      IG_TEST_USER_ID: ${IG_TEST_USER_ID:-}
+      IG_MLBB_TOKEN: ${IG_MLBB_TOKEN:-}
+      IG_MLBB_USER_ID: ${IG_MLBB_USER_ID:-}
+      R2_ACCOUNT_ID: ${R2_ACCOUNT_ID:-} # a clip goes to Instagram as a signed link to R2 (accounts.yaml instagram.upload)
+      R2_BUCKET: ${R2_BUCKET:-}
+      R2_ACCESS_KEY_ID: ${R2_ACCESS_KEY_ID:-}
+      R2_SECRET_ACCESS_KEY: ${R2_SECRET_ACCESS_KEY:-}
+    volumes:
+      - ./config:/app/config:ro
+      - media:/media:ro
+
+  # TikTok, assisted: sends each approved clip (as a file) and its caption to your Telegram; you post from the TikTok app.
+  # No account tokens at all. It may make a lighter copy of a long clip to fit a bot's upload limit, hence the memory.
+  publisher-tiktok:
+    <<: *service
+    command: ["python", "-m", "services.publisher", "tiktok"]
+    environment: # only this container holds the R2 keys; without them clips go as Telegram files
+      <<: *core-env
+      R2_ACCOUNT_ID: ${R2_ACCOUNT_ID:-}
+      R2_BUCKET: ${R2_BUCKET:-}
+      R2_ACCESS_KEY_ID: ${R2_ACCESS_KEY_ID:-}
+      R2_SECRET_ACCESS_KEY: ${R2_SECRET_ACCESS_KEY:-}
+    volumes:
+      - ./config:/app/config:ro
+      - media:/media:ro
+    mem_limit: 512m
+
+  # Keeps the pipeline healthy: republishes lost messages and due retries, alerts on dead jobs, cleans up the disk.
+  scaler:
+    <<: *service
+    command: ["python", "-m", "services.scaler"]
+    environment: *core-env
+    volumes:
+      - ./config:/app/config:ro
+      - media:/media # it deletes recordings and clips nobody needs any more (services/scaler/retention.py)
+
+  # a test tool, not a service: docker compose run --rm replay <youtube link> --minutes 50  (see services/replay)
+  replay:
+    <<: *service
+    profiles: ["tools"]
+    entrypoint: ["python", "-m", "services.replay"]
+    environment: *core-env
+    volumes:
+      - ./config:/app/config:ro
+      - media:/media
+    mem_limit: 1g # the download and the cut go to /media/replay-tmp (the CLI), not to memory
+
+volumes:
+  pgdata:
+  redisdata:
+  media:

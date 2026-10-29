@@ -1,0 +1,21 @@
+# keep secrets, data and development files out of the image
+.env
+.env.*
+!.env.example
+tokens/
+.git/
+.github/
+.claude/
+.venv/
+.mypy_cache/
+.pytest_cache/
+.ruff_cache/
+**/__pycache__/
+media/
+data/
+tests/
+docs/
+scripts/
+*:Zone.Identifier
+*.mp4
+*.ts

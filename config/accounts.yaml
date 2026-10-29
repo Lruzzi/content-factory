@@ -1,0 +1,121 @@
+# =============================================================================
+# accounts.yaml — your publishing accounts. One publisher worker per platform
+# serves all accounts of that platform; each account has its own limits.
+#
+# NO SECRETS IN THIS FILE. `credentials` only names env vars / token files that
+# the publisher services (and nothing else) read. .env and tokens/ are gitignored.
+# A key that was ever committed must be rotated.
+#
+# test: true  -> used by rnd mode (profiles' test_targets)
+# test: false -> brand accounts used by publish mode (profiles' targets)
+# =============================================================================
+
+timezone: Asia/Jakarta
+
+# Where an approved clip is kept for a while so it can be downloaded (Cloudflare R2). Used by assisted TikTok posting:
+# you get a download link (no 50 MB limit, no re-encoding) and a Delete file button in Telegram. Instagram and
+# YouTube take direct uploads and do not use it. Without the R2 variables in .env a clip is sent as a Telegram file.
+# R2's free tier is 10 GB: files are deleted when you press the button, or after max_age_h, and above max_total_gb
+# stored, clips go as Telegram files instead.
+# How Instagram clips reach Instagram. `r2`: the clip is stored in R2 (media_host below) and Instagram fetches it through
+# a signed link and processes it in the background, then the copy is deleted. `resumable`: Instagram's own upload, whose
+# final request has a deadline of about 48 seconds that clips of 50 s and more at 1080p60 miss about 7 times in 10
+# (measured 2026-10-26: the same 51 MB clip failed 7 of 10 times that way and went through 3 of 3 as a link).
+instagram:
+  upload: r2
+
+media_host:
+  provider: r2
+  bucket_env: R2_BUCKET
+  account_id_env: R2_ACCOUNT_ID
+  access_key_env: R2_ACCESS_KEY_ID
+  secret_key_env: R2_SECRET_ACCESS_KEY
+  # One stored copy of each clip, shared by the approval message, TikTok and Instagram (services/publisher/clipstore.py).
+  # It is uploaded when the clip is sent for approval: a rejected clip is deleted at once, one nobody answered when its
+  # review expires (profile review.expire_after_h, 24), an approved one keep_after_approval_h hours after you approved.
+  link_ttl_min: 2880               # a link works for 2 days, the longest a copy can exist (R2 allows up to 7)
+  keep_after_approval_h: 24        # an approved clip is kept this long, then deleted
+  max_age_h: 48                    # a file is deleted after this long, whatever else happens
+  max_total_gb: 8                  # R2's free tier is 10 GB; above this no copy is stored and approvals go without a link
+
+# TikTok: posting through the Content Posting API needs TikTok's audit.
+# Until audited, posts are private (SELF_ONLY), the account must be private,
+# and at most 5 users/day. Ours is a personal tool, which TikTok's review rules
+# do not favour, so we post ASSISTED: the clip (as a file) and its caption go to
+# your Telegram and you post from the TikTok app (`make up` runs publisher-tiktok).
+# `api` is not built. Never automate the TikTok website/app instead of the API.
+tiktok:
+  posting: assisted                # assisted | api (api is not built)
+  fallback_when_unaudited: assisted_for_brand   # brand accounts get assisted posting until audited
+
+defaults:
+  daily_cap: 6                   # posts per account in the last 24 hours; /cap in Telegram replaces it
+  min_spacing_min: 120           # /spacing
+  # WIB. Not researched: the stats collector (FR-11) should say which hours to keep. /window in Telegram replaces it.
+  post_windows: ["10:00-23:00"]
+  visibility: public
+
+accounts:
+  # ---- Test accounts (rnd mode): public, separate from the brand ----
+  - id: yt_test
+    platform: shorts
+    test: true
+    credentials: { token_file: tokens/yt_test.json, client_secrets_file: tokens/wiwawmoment.json }
+  - id: tt_test
+    platform: tiktok
+    test: true
+    credentials: { token_file: tokens/tt_test.json, client_key_env: TIKTOK_CLIENT_KEY }
+  - id: ig_test
+    platform: reels
+    test: true
+    credentials: { token_env: IG_TEST_TOKEN, ig_user_id_env: IG_TEST_USER_ID }
+  - id: fb_test
+    platform: facebook
+    test: true
+    credentials: { token_env: FB_TEST_PAGE_TOKEN, page_id_env: FB_TEST_PAGE_ID }
+
+  # ---- MLBB brand (publish mode) ----
+  - id: yt_mlbb
+    platform: shorts
+    credentials: { token_file: tokens/yt_mlbb.json, client_secrets_file: tokens/wiwawmoment.json }
+  - id: tt_mlbb
+    platform: tiktok
+    credentials: { token_file: tokens/tt_mlbb.json, client_key_env: TIKTOK_CLIENT_KEY }
+  - id: ig_mlbb
+    platform: reels
+    credentials: { token_env: IG_MLBB_TOKEN, ig_user_id_env: IG_MLBB_USER_ID }
+  - id: fb_mlbb
+    platform: facebook
+    credentials: { token_env: FB_MLBB_PAGE_TOKEN, page_id_env: FB_MLBB_PAGE_ID }
+
+  # ---- Podcast brand ----
+  - id: yt_podcast
+    platform: shorts
+    enabled: false
+    credentials: { token_file: tokens/yt_podcast.json, client_secrets_file: tokens/wiwawmoment.json }
+  - id: tt_podcast
+    platform: tiktok
+    enabled: false
+    credentials: { token_file: tokens/tt_podcast.json, client_key_env: TIKTOK_CLIENT_KEY }
+  - id: ig_podcast
+    platform: reels
+    enabled: false
+    credentials: { token_env: IG_PODCAST_TOKEN, ig_user_id_env: IG_PODCAST_USER_ID }
+
+  # ---- IRL brand ----
+  - id: yt_irl
+    platform: shorts
+    enabled: false
+    credentials: { token_file: tokens/yt_irl.json, client_secrets_file: tokens/wiwawmoment.json }
+  - id: tt_irl
+    platform: tiktok
+    enabled: false
+    credentials: { token_file: tokens/tt_irl.json, client_key_env: TIKTOK_CLIENT_KEY }
+
+# Per-platform rules. VALUES NEED VERIFICATION against each platform's current
+# docs before going live; platforms change them often.
+platforms:
+  shorts:   { max_len_s: 180, title_max: 100 }
+  tiktok:   { max_len_s: 600, title_max: 2200 }
+  reels:    { max_len_s: 180, title_max: 2200 }
+  facebook: { max_len_s: 180, title_max: 2200 }

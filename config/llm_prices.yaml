@@ -1,0 +1,34 @@
+# =============================================================================
+# llm_prices.yaml — what each LLM costs, in US dollars per MILLION tokens.
+# The cost ledger multiplies tokens by these, so the daily budget stop (limits.daily_budget_usd) can see LLM spend.
+# Every judge model a profile uses must be listed here (config_schema.py checks it). Use 0 for a free model: its
+# tokens are still recorded, only the dollars are zero.
+#
+# Key: <provider>/<model>, exactly as in the profile (selection.llm_judge.provider and .model).
+# Prices change and differ by provider: check the provider's pricing page before trusting a number.
+# =============================================================================
+
+checked: 2026-10-06      # from the Claude API reference cached on this date; re-check against the live pricing page
+
+models:
+  anthropic/claude-haiku-5-5:  { input: 0.10, output: 0.50 }    # prompts up to 100K tokens; $0.50 / $2.50 above that
+  anthropic/claude-sonnet-5-5: { input: 2.00, output: 10.00 }
+  anthropic/claude-opus-5-5:   { input: 4.00, output: 20.00 }
+
+  # Free tiers: the tokens are still recorded, the dollars are 0. Gemini is free only while the key's Google project has
+  # no billing attached, and its free tier may let Google use the content to improve its products (check its terms).
+  # OpenRouter free models can log prompts too. Both matter if a transcript ever holds something private.
+  openai_compatible/gemini-3.5-flash: { input: 0, output: 0 }
+  "openai_compatible/poolside/laguna-s-2.1:free": { input: 0, output: 0 }
+  "openai_compatible/recursive/flint-v1.0:free": { input: 0, output: 0 }
+
+  # Paid models through OpenRouter, from its model list on 2026-10-25 (prices move: check openrouter.ai/models). Spend on
+  # these is what the OpenRouter budget (workers.yaml budget.openrouter) counts.
+  "openai_compatible/deepseek/deepseek-v4-flash-0731": { input: 0.04, output: 0.13 }
+  "openai_compatible/qwen/qwen3.7-flash": { input: 0.03, output: 0.13 }
+  "openai_compatible/anthropic/claude-haiku-5.5": { input: 0.10, output: 0.50 }
+
+  # Other providers: add the exact model id the provider uses, with its price (0 for a free model), for example
+  #   openai_compatible/<vendor>/<model>: { input: 0, output: 0 }
+  # OpenRouter model ids look like <vendor>/<model>, and free ones end in ":free". Free model lists change without
+  # notice, so copy an id from the provider's own models page rather than from here.

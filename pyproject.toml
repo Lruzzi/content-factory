@@ -1,0 +1,70 @@
+[project]
+name = "content-factory"
+version = "0.0.0"
+description = "Config-driven pipeline that clips live streams and long videos into vertical Shorts."
+readme = "README.md"
+requires-python = ">=3.14"
+# Lower bounds are the versions checked on 2026-10-22 (no known vulnerabilities); uv.lock pins exact ones.
+# pg8000 (BSD-3) rather than psycopg (LGPL-3.0): the project avoids copyleft dependencies.
+dependencies = [
+    "pydantic>=2.14.1",
+    "pyyaml>=6.0.3",
+    "redis>=8.1.0",
+    "sqlalchemy>=2.1.6",
+    "alembic>=1.20.1",
+    "pg8000>=1.31.5",
+    "fonttools>=4.67.0",  # MIT: measures caption text so lines fit the safe zone
+    "anthropic>=2.1.0",  # Apache-2.0: Claude calls
+    "openai>=3.36.1",  # Apache-2.0: any OpenAI-compatible API (OpenRouter, Groq, Gemini, Ollama)
+    "streamlink>=8.6.2",  # BSD-2: records live streams
+    "yt-dlp>=2026.10.21",  # Unlicense: finds out whether a channel is live
+    "httpx2>=2.16.0",  # BSD-3: the Telegram client (already installed with the OpenAI SDK)
+    "mediapipe>=1.1.1",
+    "boto3>=1.43.118",
+    "pytchat>=0.5.5",  # MIT: reads the public live chat (message times only are kept); unmaintained since 2022, so watch it
+]
+
+[dependency-groups]
+dev = [
+    "pytest>=9.1.1",
+    "ruff>=0.17.1",
+    "mypy>=2.4.0",
+    "types-pyyaml>=6.0.12",
+    "pip-audit>=2.10.1",
+    "bandit>=1.9.4",
+    "pip-licenses>=5.5.5",
+    "pre-commit>=4.7.0",
+]
+
+[tool.uv]
+package = false  # an application, not a library
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = [".", "config", "tests", "scripts"]
+markers = ["integration: needs Postgres and Redis (TEST_DATABASE_URL and TEST_REDIS_URL; `make itest` sets them)"]
+
+[tool.ruff]
+line-length = 120
+target-version = "py314"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B", "S"]  # S = flake8-bandit
+
+[tool.ruff.lint.isort]
+known-first-party = ["common", "services", "config_schema", "profile_factory", "check_licenses"]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/**" = ["S101", "S603"]  # asserts, and subprocess calls with fixed arguments
+
+[tool.mypy]
+python_version = "3.14"
+mypy_path = "config:tests:scripts"
+files = ["common", "services", "migrations", "config", "tests", "scripts"]
+check_untyped_defs = true
+warn_unused_ignores = true
+plugins = ["pydantic.mypy"]
+
+[[tool.mypy.overrides]]
+module = ["fontTools.*", "mediapipe.*", "boto3.*", "botocore.*", "pytchat.*"]
+ignore_missing_imports = true  # fontTools ships no type information

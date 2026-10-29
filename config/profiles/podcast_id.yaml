@@ -1,0 +1,69 @@
+# =============================================================================
+# Profile: Indonesian podcasts (talking heads)
+# Mostly regular uploads; transcript-driven.
+# =============================================================================
+
+name: podcast_id
+enabled: false                     # execution order: after MLBB passes its gate
+niche: podcast
+mode: rnd
+language: id
+
+live:
+  capture: false                   # podcasts are uploads, not streams
+
+discover:
+  min_duration_s: 1200
+  title_exclude: ["#shorts", "trailer", "teaser", "clip"]
+
+scout:
+  enabled: true
+  keywords: ["podcast indonesia", "podcast lucu"]
+  region: ID
+
+signals:
+  heatmap:   { enabled: true,  weight: 0.40 }
+  chat:      { enabled: false }
+  loudness:  { enabled: true,  weight: 0.25 }   # laughter peaks
+  scene_cut: { enabled: true,  weight: 0.10 }   # camera switches between hosts
+  keywords:  { enabled: false }
+  transcript:
+    mode: candidates_only          # full would exceed Groq's free daily audio cap
+
+selection:
+  clip_length_s: [30, 60]
+  min_gap_s: 180
+  llm_judge:
+    prompt: prompts/podcast_id.md
+    # The model chain is the general one in _defaults.yaml (OpenRouter first, free tiers last).
+
+layout:
+  type: facetrack
+  smoothing: 0.9
+
+captions:
+  max_words_per_line: 4
+
+branding:
+  logo: { enabled: false }            # no brand logo yet: add assets/logo.png, then set enabled: true
+  credit: { text: "Full episode: {source_name}" }
+
+package:
+  hashtags: { fixed: ["#podcastindonesia"], generated_max: 4 }
+
+targets:
+  - account: yt_podcast
+  - account: tt_podcast
+  - account: ig_podcast
+test_targets:
+  - account: yt_test
+  - account: tt_test
+
+sources:
+  - url: https://www.youtube.com/@hashcreative        # placeholder, verify
+    id: pwk
+    name: "PWK – Hash Creative"
+    clip_policy: open
+    overrides:
+      discover:
+        title_include: ["PWK"]

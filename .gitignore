@@ -1,0 +1,28 @@
+# secrets — never commit
+.env
+.env.*
+!.env.example
+tokens/
+config.local/
+.claude/
+*:Zone.Identifier
+*.session
+*.pem
+*.key
+
+# data and media
+data/
+media/
+*.ts
+*.mp4
+*.m4a
+*.flac
+*.wav
+
+# python
+__pycache__/
+*.py[cod]
+.venv/
+.mypy_cache/
+.pytest_cache/
+.ruff_cache/

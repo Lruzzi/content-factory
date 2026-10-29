@@ -1,0 +1,25 @@
+# =============================================================================
+# hermes.yaml — what Hermes Agent may change, when you ask it in Telegram.
+# Every change is validated (config_schema.py), shown to you as an exact diff and
+# applied only after your tap. Hermes cannot edit this file.
+#
+# Hard limits (config_schema.py rejects a file that removes them):
+#   - it can never edit _defaults.yaml, accounts.yaml, workers.yaml or this file
+#   - deny_keys always includes mode, review, targets and test_targets, so it can
+#     never switch to publish mode, turn approval off, or change where clips go
+# Change those yourself, by hand.
+# =============================================================================
+
+# Files Hermes may overwrite (a backup of each is kept first).
+# [!_]* skips _defaults.yaml, the same pattern the loader uses.
+edit_files: ["profiles/[!_]*.yaml"]
+
+# Top-level profile keys Hermes may not change (add more here, never fewer than the hard limits).
+deny_keys: [mode, review, targets, test_targets, limits]
+
+# What Hermes may do to sources in the database. There is no delete and no
+# un-blocking: removing a source loses its claim history, and a source blocked or
+# paused after a claim is reopened by you, by hand.
+source_actions: [add, update, pause, resume, disable]
+
+keep_backups: 20                   # newest backups kept per file

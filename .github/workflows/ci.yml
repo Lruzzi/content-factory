@@ -1,0 +1,100 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+# Actions are pinned to commit SHAs (the comment names the release). Dependabot keeps them current.
+jobs:
+  checks:
+    name: lint, tests, security, licenses
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    # Throwaway services for the integration tests: they live only inside this job, so no password is used.
+    services:
+      postgres:
+        image: postgres:18.6-trixie@sha256:edb0c08dc33befd0262ab3b5cf1c4f3f8cfd8b09e88c05b45adee29d6761ddb6
+        env:
+          POSTGRES_USER: factory
+          POSTGRES_HOST_AUTH_METHOD: trust
+          POSTGRES_DB: factory
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U factory -d factory" --health-interval 5s --health-timeout 5s --health-retries 10
+      redis:
+        image: redis:8.8.3-trixie@sha256:418e397fd48d66e450af13baab123397f2d2580b07ef310c3a5dbe96c3d731f1
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping" --health-interval 5s --health-timeout 5s --health-retries 10
+    env:
+      TEST_DATABASE_URL: postgresql+pg8000://factory@localhost:5432/factory
+      TEST_REDIS_URL: redis://localhost:6379/0
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: astral-sh/setup-uv@18d369b23da25a81e9458561248e1aafff6a70fa # v10.3.1
+        with:
+          version: "0.13.5"
+          enable-cache: true
+      - run: sudo apt-get update && sudo apt-get install -y --no-install-recommends ffmpeg fonts-dejavu-core  # render tests
+      - run: make install
+      - run: make lint
+      - run: make test
+      - run: make config
+      - run: make security
+      - run: make licenses
+
+  secrets:
+    name: gitleaks (full history)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      # The CLI image rather than gitleaks-action, which needs a paid license for organization repos.
+      - run: >-
+          docker run --rm -v "$PWD:/repo"
+          ghcr.io/gitleaks/gitleaks@sha256:c00b6bd0aeb3071cbcb79009cb16a60dd9e0a7c60e2be9ab65d25e6bc8abbb7f
+          git /repo --redact --no-banner
+
+  images:
+    name: trivy (container images)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      # Our own service image: built from the Dockerfile, then scanned like the two above.
+      - run: docker build -t content-factory:ci .
+      - uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
+        with:
+          image-ref: content-factory:ci
+          severity: CRITICAL,HIGH
+          ignore-unfixed: true
+          scanners: vuln
+          exit-code: "1"
+      - uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
+        with:
+          image-ref: postgres:18.6-trixie@sha256:edb0c08dc33befd0262ab3b5cf1c4f3f8cfd8b09e88c05b45adee29d6761ddb6
+          severity: CRITICAL,HIGH
+          ignore-unfixed: true
+          exit-code: "1"
+      - uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
+        with:
+          image-ref: redis:8.8.3-trixie@sha256:418e397fd48d66e450af13baab123397f2d2580b07ef310c3a5dbe96c3d731f1
+          severity: CRITICAL,HIGH
+          ignore-unfixed: true
+          exit-code: "1"

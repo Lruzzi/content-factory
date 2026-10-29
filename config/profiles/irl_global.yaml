@@ -1,0 +1,60 @@
+# =============================================================================
+# Profile: Global IRL streamers (English)
+# Live capture matters most here; clips lose value within hours.
+# =============================================================================
+
+name: irl_global
+enabled: false                     # execution order: third
+niche: irl
+mode: rnd
+language: en
+
+live:
+  capture: true
+  check_every_min: 3
+  segment_min: 5                   # shorter segments = faster previews
+
+discover:
+  poll_every_min: 15
+  max_age_days: 7
+  min_duration_s: 1800
+
+signals:
+  heatmap:   { enabled: true,  weight: 0.15 }
+  chat:      { enabled: true,  weight: 0.50, window_s: 8 }
+  loudness:  { enabled: true,  weight: 0.35 }
+  scene_cut: { enabled: false }
+  keywords:  { enabled: false }
+
+selection:
+  clip_length_s: [15, 45]
+  top_k: 8
+  llm_judge:
+    prompt: prompts/irl_en.md
+
+layout:
+  type: center
+  smoothing: 0.8
+
+branding:
+  credit: { text: "Stream: {source_name}" }
+
+package:
+  prompt: prompts/package_en.md
+  hashtags: { fixed: [], generated_max: 3 }
+
+targets:
+  - account: yt_irl
+  - account: tt_irl
+test_targets:
+  - account: yt_test
+  - account: tt_test
+
+limits:
+  daily_budget_usd: 1.00
+
+sources:
+  - url: https://www.youtube.com/@REPLACE_ME
+    name: "Example streamer"
+    enabled: false
+    clip_policy: open

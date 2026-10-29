@@ -1,0 +1,9 @@
+# The Telegram group and its four topics (rooms). Not secrets.
+# `python -m services.review.rooms_setup` fills this in.
+# Without chat_id everything goes to your private chat.
+chat_id: -1004376007332
+topics:
+  approval: 3
+  alerts: 4
+  monitoring: 5
+  commands: 6

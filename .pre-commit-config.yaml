@@ -1,0 +1,26 @@
+# Install once: uv run pre-commit install
+# Every hook is local, so versions come from uv.lock and the pinned gitleaks image, not from other repos.
+repos:
+  - repo: local
+    hooks:
+      - id: gitleaks
+        name: gitleaks (staged changes)
+        language: system
+        entry: sh -c 'docker run --rm -v "$PWD:/repo" ghcr.io/gitleaks/gitleaks@sha256:c00b6bd0aeb3071cbcb79009cb16a60dd9e0a7c60e2be9ab65d25e6bc8abbb7f git /repo --pre-commit --staged --redact --no-banner'
+        pass_filenames: false
+      - id: ruff-check
+        name: ruff check
+        language: system
+        entry: uv run ruff check
+        types: [python]
+      - id: ruff-format
+        name: ruff format
+        language: system
+        entry: uv run ruff format --check
+        types: [python]
+      - id: config-validate
+        name: validate config
+        language: system
+        entry: uv run python config/config_schema.py
+        files: ^(config/|tests/)
+        pass_filenames: false

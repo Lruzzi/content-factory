@@ -1,0 +1,165 @@
+# =============================================================================
+# Profile: Mobile Legends (Indonesian gaming streams)
+# Many creators -> one niche -> one brand on all 4 platforms.
+# =============================================================================
+
+name: mlbb
+enabled: true
+niche: gaming
+mode: rnd
+language: id
+
+live:
+  capture: true                  # most MLBB clips come from live streams
+  quality: 1080p                 # the stream offers up to 1080p60; crops of the face cam and gameplay stay sharper.
+                                 # About 2.1 GB/h against 1.15 GB/h at 720p (measured); retention keeps the disk bounded.
+
+# One recap per finished match: the best moments of the match in order, as one video (see compilation in _defaults.yaml).
+compilation:
+  enabled: true
+
+discover:
+  min_duration_s: 900
+  backfill_per_source: 1         # a small first batch (a video gives up to 4 previews); Groq audio is shared with the lives
+  daily_per_source: 1
+  title_include: ["mlbb", "mobile legends", "rank", "mythic", "push rank"]
+
+scout:
+  enabled: true
+  keywords: ["mobile legends live", "mlbb indonesia", "push rank mythic"]
+  region: ID
+
+# Streamers read donation messages aloud, announce news and teach in the stream.
+# None of that spikes chat or loudness, so the transcript is read in full (hybrid).
+signals:
+  transcript:
+    mode: full
+    # Streamers mix Indonesian and English gaming words; Whisper takes one language, so show it the mix.
+    prompt: >-
+      Halo guys, welcome to my livestream. Hari ini kita push rank ke Mythic Glory, pakai hero Nolan, Ling, Lancelot
+      dan Julian. Gank lane, rotasi ke turtle, ambil lord, build item Endless Battle. Savage! Maniac! Terima kasih
+      donasinya dari Saweria dan Trakteer.
+    # Hero names, items and game terms for the `transcript_fix` check of each clip's words (not for Whisper itself: a long
+    # list in Whisper's prompt did not make it spell them better, 2026-10-28). From memory: add the ones Whisper gets wrong.
+    glossary:
+      [Layla, Miya, Balmond, Saber, Alice, Nana, Tigreal, Alucard, Karina, Akai, Franco, Bane, Bruno, Clint, Rafaela, Eudora,
+       Zilong, Fanny, Minotaur, Lolita, Hayabusa, Freya, Gord, Natalia, Kagura, Chou, Sun, Alpha, Ruby, Yi Sun-shin, Moskov,
+       Johnson, Cyclops, Estes, Hilda, Aurora, Lapu-Lapu, Vexana, Roger, Karrie, Gatotkaca, Harley, Irithel, Grock, Argus,
+       Odette, Lancelot, Diggie, Hylos, Zhask, Helcurt, Pharsa, Lesley, Jawhead, Angela, Gusion, Valir, Martis, Uranus,
+       Hanabi, Kaja, Selena, Aldous, Claude, Vale, Leomord, Lunox, Hanzo, Belerick, Kimmy, Thamuz, Harith, Minsitthar,
+       Kadita, Faramis, Badang, Khufra, Granger, Guinevere, Esmeralda, Terizla, Ling, Dyrroth, Lylia, Baxia, Masha, Wanwan,
+       Silvanna, Cecilion, Carmilla, Atlas, Popol, Kupa, Yu Zhong, Luo Yi, Benedetta, Khaleed, Barats, Brody, Yve, Mathilda,
+       Paquito, Gloo, Beatrix, Phoveus, Natan, Aulus, Aamon, Valentina, Edith, Floryn, Yin, Melissa, Xavier, Julian,
+       Fredrinn, Joy, Novaria, Arlott, Ixia, Nolan, Cici, Chip, Zhuxin, Suyou, Lukas, Kalea, Zetian,
+       Blade of Despair, Bloodlust Axe, Wind of Nature, Hunter Strike, Endless Battle, Malefic Roar, Malefic Gun, Immortality,
+       Brute Force Breastplate, Dominance Ice, Queen's Wings, Athena's Shield, Antique Cuirass, Oracle, Divine Glaive,
+       Holy Crystal, Glowing Wand, Genius Wand, Lightning Truncheon, Concentrated Energy, Blood Wings, Winter Truncheon,
+       Cursed Helmet, Thunder Belt, Necklace of Durance, Berserker's Fury, Demon Hunter Sword, Scarlet Phantom,
+       Rose Gold Meteor, Sea Halberd, Obsidia,
+       stun, burst, ulti, gank, rotasi, push rank, lord, turtle, savage, maniac, mythic, jungler, roamer, tank, marksman,
+       assassin, mage, fighter, support, lifesteal, shield, retribution, flicker, execute, purify, sprint, revitalize]
+  heatmap:   { enabled: true,  weight: 0.25 }
+  chat:      { enabled: true,  weight: 0.40, window_s: 10 }   # chat explodes on savage/maniac
+  loudness:  { enabled: true,  weight: 0.25 }
+  scene_cut: { enabled: false }                                # gameplay cuts constantly; noisy
+  keywords:
+    enabled: true
+    weight: 0.10
+    terms: ["savage", "maniac", "wiwaw", "lord", "comeback", "anjir"]
+
+# Bad words in the stream are muted in the clip and starred in its captions (only what Whisper writes down is caught).
+# Edit the list freely; a word is matched whole, any case, with stretched letters ("jancoook") counted as the word.
+profanity:
+  terms: [anjing, bangsat, bajingan, brengsek, tolol, goblok, kontol, memek, ngentot, jancok, jancuk, cok, cuk, asu, babi,
+          tai, fuck, fucking, shit, bitch, asshole, dick]
+
+selection:
+  mode: hybrid
+  clip_length_s: [20, 50]
+  kinds:
+    tutorial: { clip_length_s: [30, 75] }   # a tip needs room for the setup
+  # No `callouts:` here. Mobile Legends' announcer says "Solo kill", "Mega kill" and the rest for any player of either
+  # team, so those words in the transcript do not mean the streamer got the kill (Rineeeloyyyeh, 2026-10-26: three
+  # rejected clips of announcer lines, not of him). The setting still exists in the schema for a niche where it fits.
+  llm_judge:
+    prompt: prompts/gaming_id.md
+    # The model chain is the general one in _defaults.yaml (OpenRouter first, free tiers last).
+
+# The streams are 1080p at 60 frames a second; 30 fps looked choppy. crf 18 with the medium preset costs about 1.5x the
+# file size of crf 20 with veryfast for about 3 dB (measured on real footage, 2026-10-25). Check that Instagram and
+# Facebook take 60 fps if a post of this profile is ever refused.
+output:
+  fps: 60
+  crf: 18
+  preset: medium
+
+layout:
+  type: split
+  split_ratio: 0.40                          # face cam on top (40%), gameplay below (60%); 0.50 crops the cam tighter
+  main: { x: 420, y: 0, w: 1080, h: 1080 }   # default gameplay crop (centre)
+  wide: { enabled: true }                    # draft pick and the loading screen: the whole frame at once (mode: fit), or pan
+  # cam is set per source: every streamer's face-cam sits somewhere else
+
+branding:
+  logo: { enabled: false }            # no brand logo yet: add assets/logo.png, then set enabled: true
+  credit: { text: "Full stream: {source_name}" }
+
+package:
+  hashtags: { fixed: ["#mlbb", "#mobilelegends", "#mlbbindonesia"], generated_max: 3 }
+
+targets:            # brand accounts (publish mode)
+  - account: yt_mlbb
+  - account: tt_mlbb
+  - account: ig_mlbb
+  - account: fb_mlbb
+test_targets:       # test accounts (rnd mode)
+  - account: yt_test
+  - account: tt_test
+  - account: ig_test
+  - account: fb_test
+
+limits:
+  max_clips_per_video: 4
+  max_clips_per_live_hour: 2
+  daily_budget_usd: 1.50
+
+# --- WHAT we clip ------------------------------------------------------------
+# SEED ONLY: the database owns sources. These entries are loaded once into an empty database;
+# after that you add, pause or change sources by asking Hermes in Telegram (see hermes.yaml).
+# Paste channel links from the browser. Accepted:
+#   https://www.youtube.com/@name   (/live, /videos and /streams are checked)
+#   https://www.youtube.com/@name/streams   https://www.youtube.com/channel/UC...
+#   https://www.youtube.com/playlist?list=...   https://www.twitch.tv/name   https://kick.com/name
+# Two creators for now: Groq's free plan (~8 h of audio a day) is shared between their streams.
+sources:
+  # First creator. Link checked 2026-10-22: Indonesian description, MLBB streams of about 6 h each.
+  # The cam box below was measured on a real recording; re-check it if the creator changes their overlay.
+  - url: https://www.youtube.com/@leokabuki
+    name: "Leo Kabuki"
+    clip_policy: open
+    overrides:
+      layout:
+        cam: { x: 0, y: 758, w: 572, h: 322 }   # bottom-left face cam, measured on a 2026-10-23 recording (1920x1080 reference)
+        donation: { x: 1190, y: 105, w: 530, h: 315 }   # the blue HEY! card with the amount, sender and message (2026-10-25)
+
+  # Second creator. Added 2026-10-24. The cam box (bottom-left) and the game area (without the black bars of his frame)
+  # were measured on a real recording, in the 1080-pixel-high reference frame.
+  - url: https://www.youtube.com/@JejeAdriel20
+    name: "Jeje Adriel"
+    clip_policy: open
+    overrides:
+      layout:
+        cam: { x: 0, y: 723, w: 420, h: 357 }
+        main: { x: 420, y: 52, w: 1080, h: 885 }
+        donation: { x: 20, y: 90, w: 780, h: 360 }   # his avatar, amount and message, over the left of the game (2026-10-25)
+
+  # Third creator. Added 2026-10-27. Live when added; the face cam (bottom-left, over a sponsor banner) and the game
+  # area (above the banner) were measured on a live frame, in the 1080-pixel-high reference frame. No donation box yet:
+  # none was on screen. Measure it from the first donation (see layout.donation on the other creators).
+  - url: https://www.youtube.com/@Rineeeloyyyeh
+    name: "Rineeeloyyyeh"
+    clip_policy: open
+    overrides:
+      layout:
+        cam: { x: 54, y: 780, w: 480, h: 265 }
+        main: { x: 420, y: 0, w: 1080, h: 880 }
