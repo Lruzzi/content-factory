@@ -2,7 +2,7 @@
 # Base images are pinned by digest (checked 2026-10-23); Dependabot proposes updates.
 FROM ghcr.io/astral-sh/uv:0.13.5@sha256:32a7bb39b496babbd997b0a39a4d66c126bdaf5661b302bf6f06abda8deca6ff AS uv
 
-FROM python:3.14-slim-trixie@sha256:0514bc76712d64f8bb48adcb95b1ab0d88c69fee95d62fe4c18ee948bee9b1e1
+FROM python:3.15-slim-trixie@sha256:65a65fc7b30b06cb6df4930fd4650697cb23f4c2698ab81fc87e4b031bc36928
 
 # FFmpeg is run as a separate program, never linked into our code. Debian's build includes GPL parts (x264): fine for
 # private use; if the image is ever distributed, check those terms first.
